@@ -1,24 +1,15 @@
-HeizgeblaeseController v1.6 – IP-Symcon
+HeizgeblaeseController v1.7 – IP-Symcon
 
-AENDERUNG GEGENUEBER v1.5
-- Bei Erstellung eines Wochenplans wird an jedem Tag um 00:00 die Aktion AUS
-  als Grundzustand angelegt. Bei bestehenden Wochenplaenen wird dieser
-  Schaltpunkt nur ergaenzt, wenn am Tagesanfang noch kein Punkt existiert.
-- Vorhandene Schaltpunkte und ausdruecklich eingestellte Stufen werden nicht
-  veraendert oder automatisch zurueckgesetzt.
-- Grund: IP-Symcons nativer Wochenplan hat keine leeren Zeitbereiche. Jede
-  Aktion gilt bis zur naechsten. Ein gruen markierter Bereich ist Stufe 2,
-  orange markierte Bereiche sind bereits als Stufe 3 hinterlegt und damit
-  NICHT automatisch als AUS erkennbar. Bestehende orange Abschnitte, die AUS
-  sein sollen, einmalig im Wochenplan auf AUS umstellen; auch am Ende eines
-  Heizintervalls einen AUS-Schaltpunkt setzen.
-- Alle anderen Funktionen aus v1.5 bleiben erhalten.
+Basiert auf v1.5 (nicht auf v1.6).
 
-HINWEIS
-Die Grundstellung AUS um 00:00 beendet absichtlich eine ueber Mitternacht
-laufende Stufe. Bei geplanten Nachtintervallen muss die Stufe auch nach 00:00
-explizit gesetzt werden.
+- Originaler nativer Wochenplan aus v1.5 bleibt unveraendert.
+- Keine erzwungenen 00:00-Schaltpunkte.
+- Stufe 1, 2, 3 bleiben erhalten. AUS ist sowohl Aktion 0 als auch als LETZTE Aktion 4 verfuegbar. Dadurch wird beim Aufziehen neuer Bereiche in WebFront, sofern IP-Symcon die letzte Aktion als Standard verwendet, AUS statt Stufe 3 vorgeschlagen.
+- Bestehende Schaltpunkte werden NICHT automatisch umgeschrieben, zurueckgesetzt oder geloescht.
+- Fruehere Zeitfenster-Variablen bleiben als Migrationsdaten bestehen, werden aber im Objektbaum versteckt.
+- Schaltpunkte mit Aktion 4 werden als AUS interpretiert.
+- Manuelle Uebersteuerung, Raum-/Vorlauftemperaturen, Pumpenlogik aus v1.5 bleiben erhalten.
 
-SICHERHEIT
-Keine geaenderten Stufen beim Update; Test in IP-Symcon und an der Hardware
-noch erforderlich. Vor dem Update Konfiguration sichern.
+EINSCHRAENKUNG: Das Standardverhalten des grafischen IP-Symcon-Wochenplan-Editors ist nicht ueber ein PHP-Modul frei konfigurierbar. Die zusaetzliche letzte AUS-Aktion soll den Default verbessern; ob dies bei deiner Symcon-Version tatsaechlich die automatische Farb-/Aktionswahl beeinflusst, muss im WebFront geprueft werden. Bestehende orange Stufe-3-Bloecke muessen manuell zu AUS geaendert werden, falls sie nicht absichtlich erstellt wurden.
+
+Installation wie bisher als Update des vorhandenen Moduls. Vor Aktualisierung der produktiven Steuerung Sicherung anlegen und Relais sowie Pumpe unter Aufsicht testen.

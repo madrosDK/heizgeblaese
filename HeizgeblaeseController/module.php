@@ -492,71 +492,22 @@ class HeizgeblaeseController extends IPSModule
                 IPS_SetEventScheduleGroup($id, $day, 1 << ($day - 1));
             }
         }
-        // Vorhandene Schaltpunkte von Profil 4 auf Stufe 3 umstellen;
-        // der vierte Profilwert wird NICHT automatisch geloescht.
-        if (!$fresh) {
-            $schedule = IPS_GetEvent($id);
-            foreach (($schedule['ScheduleGroups'] ?? []) as $group) {
-                $gid = (int) ($group['ID'] ?? 0);
-                foreach (($group['Points'] ?? []) as $point) {
-                    if ((int) ($point['ActionID'] ?? -1) !== 4) { continue; }
-                    $pid = (int) ($point['ID'] ?? -1);
-                    if ($gid <= 0 || $pid < 0) { continue; }
-                    IPS_SetEventScheduleGroupPoint($id, $gid, $pid,
-                        (int) ($point['Start']['Hour'] ?? 0),
-                        (int) ($point['Start']['Minute'] ?? 0),
-                        (int) ($point['Start']['Second'] ?? 0), 3);
-                }
-            }
-        }
+        // Bestehende Wochenplan-Schaltpunkte niemals automatisch umschreiben.
+        // Im WebFront wird beim Erstellen eines neuen Blocks je nach Version
+        // oft die letzte Aktion vorgeschlagen: daher AUS zusaetzlich ans Ende.
         IPS_SetEventScheduleAction($id, 0, 'AUS', 0x777777, 'HGC_Refresh(' . $this->InstanceID . ');');
         foreach ([1 => 0x2879C8, 2 => 0x39A672, 3 => 0xE6A23C] as $index => $color) {
             IPS_SetEventScheduleAction($id, $index, 'Stufe ' . $index, $color, 'HGC_Refresh(' . $this->InstanceID . ');');
         }
+        // Letzte Aktion bewusst AUS, damit beim Anlegen neuer Bereiche nicht
+        // Stufe 3 als letzte/Standardaktion angeboten wird.
+        // Aktion 0 bleibt als AUS bestehen fuer bestehende Schaltpunkte.
+        IPS_SetEventScheduleAction($id, 4, 'AUS', 0x777777, 'HGC_Refresh(' . $this->InstanceID . ');');
         if ($fresh) {
             $this->MigrateLegacyWindows($key, $id);
             IPS_SetEventActive($id, true);
-        } else {
-            // Entfernen nur falls kein Schaltpunkt mehr auf Aktion 4 verweist.
-            IPS_SetEventScheduleAction($id, 4, '', 0, '');
         }
-        // Der native Wochenplan kennt keine transparenten/ungenutzten Zeitbloecke:
-        // eine Aktion gilt bis zum naechsten Schaltpunkt. Deshalb erhaelt jeder
-        // Wochentag einen ausdruecklichen AUS-Schaltpunkt um 00:00, falls noch
-        // keiner vorhanden ist. Bestehende Schaltpunkte werden NICHT ueberschrieben.
-        // Dadurch wird keine Stufe aus dem Vortag ungewollt weitergefuehrt.
-        $this->EnsureDailyOffStart($id);
         return $id;
-    }
-
-    private function EnsureDailyOffStart($eventID)
-    {
-        $schedule = IPS_GetEvent($eventID);
-        foreach (($schedule['ScheduleGroups'] ?? []) as $group) {
-            $groupID = (int) ($group['ID'] ?? 0);
-            $hasMidnight = false;
-            $usedIDs = [];
-            foreach (($group['Points'] ?? []) as $point) {
-                $pid = (int) ($point['ID'] ?? $point['PointID'] ?? 0);
-                $usedIDs[$pid] = true;
-                $start = $point['Start'] ?? [];
-                if ((int) ($start['Hour'] ?? -1) === 0
-                    && (int) ($start['Minute'] ?? -1) === 0
-                    && (int) ($start['Second'] ?? -1) === 0) {
-                    $hasMidnight = true;
-                }
-            }
-            if ($hasMidnight) {
-                continue;
-            }
-            // Keine vorhandene ID verwenden: IP-Symcon identifiziert Punkte
-            // innerhalb einer Gruppe ausschliesslich ueber deren ID.
-            $newID = 1;
-            while (isset($usedIDs[$newID])) {
-                $newID++;
-            }
-            IPS_SetEventScheduleGroupPoint($eventID, $groupID, $newID, 0, 0, 0, 0);
-        }
     }
 
     public function EvaluateSchedules()
@@ -677,6 +628,9 @@ class HeizgeblaeseController extends IPSModule
                     $this->RegisterVariableString($ident, $label, $item[2], $position++);
                 }
                 $this->EnableAction($ident);
+                // Altdaten ausschliesslich fuer Migration behalten; weder
+                // im Objektbaum noch im WebFront weiter anzeigen.
+                IPS_SetHidden($this->GetIDForIdent($ident), true);
                 if (!$exists) {
                     SetValue($this->GetIDForIdent($ident), $item[3]);
                 }
