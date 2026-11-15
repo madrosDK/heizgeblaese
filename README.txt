@@ -1,11 +1,8 @@
-HeizgeblaeseController v1.9 - Bereinigung
+HeizgeblaeseController v2.0
 
-- Keine Zeitfenster-Variablen mehr: nur noch der native IP-Symcon-Wochenplan.
-- Entfernt gezielt die 48 veralteten Fenster-Variablen und alte Links/Dummies sowie ausgediente Profilvariablen bei ApplyChanges.
-- Bestehende Wochenplan-Schaltpunkte werden nicht veraendert.
-- Zusatzaktion 4 wird nur geloescht, wenn sie nicht mehr von einem Schaltpunkt verwendet wird; andernfalls bleibt sie als AUS erhalten.
-- Korrigiert Ermittlung des Wochenplans im Unterordner Zeitsteuerung.
-- Temperaturanzeigen bleiben Float, die gemeinsame Pumpensteuerung unveraendert.
+Temperaturen (Float), Ventil-Istposition und Pumpenstatus werden ueber direkte Links auf die konfigurierten Originalvariablen angezeigt. Die Archivhistorie der Originalvariablen bleibt erhalten, sofern diese archiviert werden.
+Sollwerte, Betriebsarten, Wochenplaene, Pumpendiagnose und Modulsteuerung bleiben eigenstaendig. Keine Originalvariablen werden geloescht.
+Bestehende Wochenplaene werden nicht zurueckgesetzt.
+Vorsicht: direkte Links auf schaltbare Original-Aktoren koennen je nach WebFront Konfiguration weiterhin bedienbar sein und die Modulsteuerung umgehen.
 
-Bitte vor dem Update IP-Symcon sichern. Das Loeschen der Altvariablen ist gewuenscht und nicht rueckgaengig zu machen.
-PHP-Syntax geprueft, kein Test mit realen Aktoren.
+Update: Bisherige vom Modul erzeugte Temperatur-Kopien und Pumpenstatus-Kopie werden nach Umstellung auf Original-Links bereinigt.

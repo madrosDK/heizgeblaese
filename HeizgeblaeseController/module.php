@@ -41,23 +41,16 @@ class HeizgeblaeseController extends IPSModule
             }
             $this->RegisterVariableInteger($key . 'ActiveValve', $label . ' | Aktueller Ventil-Sollwert', 'HGC.ValvePercent', 40);
             $this->RegisterVariableString($key . 'ActiveWindow', $label . ' | Zeitfenster aktiv', '', 50);
-            $this->RegisterVariableFloat($key . 'TemperatureFloat', $label . ' | Vorlauftemperatur', '~Temperature', 60);
-            $oldRoom = @IPS_GetObjectIDByIdent($key . 'RoomTemperature', $this->InstanceID);
-            if ($oldRoom !== false && IPS_GetVariable($oldRoom)['VariableType'] !== 2) {
-                // Typ von Bestandsvariablen ist in IP-Symcon nicht aenderbar.
-                IPS_SetIdent($oldRoom, $key . 'RoomTemperatureLegacy');
-                IPS_SetHidden($oldRoom, true);
-            }
-            $this->RegisterVariableFloat($key . 'RoomTemperature', $label . ' | Raumtemperatur', '~Temperature', 65);
-            $legacyTemp = @IPS_GetObjectIDByIdent($key . 'Temperature', $this->InstanceID);
-            if ($legacyTemp !== false) { IPS_SetHidden($legacyTemp, true); }
+            // Temperaturen und Ventil-Istwert werden ausschliesslich als Links
+            // auf die Originalvariablen angezeigt: inklusive deren Archivhistorie.
             $this->BuildWebfront($key, $label);
         }
-        $this->RegisterVariableBoolean('PumpRunning', 'Pumpe | Status', '~Switch', 70);
+        // Pumpen-Iststatus kommt direkt aus der zugeordneten Originalvariable.
         $this->RegisterVariableString('LastError', 'Letzte Fehlermeldung', '', 80);
         $this->RegisterVariableString('PumpDiagnostic', 'Pumpe | Diagnose', '', 75);
         $this->BuildPumpWebfront();
         $this->CleanupLegacyObjects();
+        $this->DeleteLegacyChild($this->InstanceID, 'PumpRunning');
         // Betriebs-Sollwerte nicht durch Konfigurationsspeicherung zuruecksetzen.
         // Beim Speichern oder Neustart keine Relais/Aktoren schalten.
         // Der Timer uebernimmt anschliessend die zeitabhaengige Regelung.
@@ -481,32 +474,12 @@ class HeizgeblaeseController extends IPSModule
 
     private function RefreshStatus()
     {
-        $on = false;
-        $known = true;
         foreach (['Workshop', 'Garage'] as $key) {
             try {
                 $stage = $this->CurrentStage($key);
                 SetValueInteger($this->GetIDForIdent($key . 'Stage'), $stage);
-                $on = $on || $stage > 0;
             } catch (Throwable $e) {
-                $known = false;
             }
-            try {
-                SetValueFloat($this->GetIDForIdent($key . 'TemperatureFloat'), (float) GetValue($this->VariableID($key . 'Temp')));
-            } catch (Throwable $e) {
-                // Temperatur ist optional und wird als Float dargestellt.
-            }
-        }
-        try {
-            $roomMap = ['Workshop' => 'WorkshopRoomTemp', 'Garage' => 'GarageRoomTemp'];
-            foreach ($roomMap as $key => $property) {
-                if ($this->ReadPropertyInteger($property) > 0) {
-                    $temperature = (float) GetValue($this->VariableID($property));
-                    SetValueFloat($this->GetIDForIdent($key . 'RoomTemperature'), $temperature);
-                }
-            }
-        } catch (Throwable $e) {
-            $this->Error('Raumtemperatur nicht lesbar: ' . $e->getMessage());
         }
         $this->ReconcilePump();
     }
@@ -547,30 +520,64 @@ class HeizgeblaeseController extends IPSModule
         $this->EnsureLink($parent, 'L_' . $ident, $display, $variable, $position);
     }
 
+    // Nur vorhandene, passende Originalvariablen werden verlinkt.
+    // Kein Duplikat, kein zwischengespeicherter Messwert und keine neue Archivserie.
+    private function LinkOriginal($parent, $ident, $name, $property, $position, $allowedTypes)
+    {
+        $linkIdent = 'L_' . $ident;
+        $old = @IPS_GetObjectIDByIdent($linkIdent, $parent);
+        $target = $this->ReadPropertyInteger($property);
+        if ($target > 0 && IPS_VariableExists($target)
+            && in_array(IPS_GetVariable($target)['VariableType'], $allowedTypes, true)) {
+            if ($old !== false && IPS_GetObject($old)['ObjectType'] !== 6) {
+                $this->SendDebug('Link', 'Ident bereits durch anderes Objekt belegt: ' . $linkIdent, 0);
+                return;
+            }
+            $this->EnsureLink($parent, $linkIdent, $name, $target, $position);
+            IPS_SetHidden($this->GetIDForLink($parent, $linkIdent), false);
+        } elseif ($old !== false) {
+            // Bei nicht mehr zugeordneter Variable keinen veralteten Link anzeigen.
+            IPS_SetHidden($old, true);
+        }
+    }
+
+    private function GetIDForLink($parent, $ident)
+    {
+        return IPS_GetObjectIDByIdent($ident, $parent);
+    }
+
     private function BuildWebfront($key, $label)
     {
         $dummy = $this->EnsureDummy('Group' . $key, $label, $this->InstanceID,
             $key === 'Workshop' ? 10 : 20);
-        $oldTempLink = @IPS_GetObjectIDByIdent('L_' . $key . 'Temperature', $dummy);
-        if ($oldTempLink !== false) { IPS_SetHidden($oldTempLink, true); }
         $items = [
             'Mode' => 'Betriebsart', 'Stage' => 'Luefterstufe', 'ValveTarget' => 'Ventil | Manuell',
-            'ActiveValve' => 'Ventil | Aktueller Sollwert', 'ActiveWindow' => 'Aktives Zeitfenster',
-            'TemperatureFloat' => 'Vorlauftemperatur', 'RoomTemperature' => 'Raumtemperatur'
+            'ActiveValve' => 'Ventil | Aktueller Sollwert', 'ActiveWindow' => 'Aktives Zeitfenster'
         ];
         $pos = 10;
         foreach ($items as $suffix => $labelItem) {
-            if ($suffix === 'RoomTemperature' && $this->ReadPropertyInteger($key . 'RoomTemp') <= 0) {
-                IPS_SetHidden($this->GetIDForIdent($key . $suffix), true);
-                $oldLink = @IPS_GetObjectIDByIdent('L_' . $key . $suffix, $dummy);
-                if ($oldLink !== false) { IPS_SetHidden($oldLink, true); }
-                continue;
-            }
             $this->LinkVariable($dummy, $key . $suffix, $labelItem, $pos);
             $link = @IPS_GetObjectIDByIdent('L_' . $key . $suffix, $dummy);
             if ($link !== false) { IPS_SetHidden($link, false); }
             $pos += 10;
         }
+        $this->LinkOriginal($dummy, $key . 'ValvePosition', 'Ventil | Istposition',
+            $key . 'Valve', 60, [1, 2]);
+        $this->LinkOriginal($dummy, $key . 'TemperatureFloat', 'Vorlauftemperatur',
+            $key . 'Temp', 70, [2]);
+        $this->LinkOriginal($dummy, $key . 'RoomTemperature', 'Raumtemperatur',
+            $key . 'RoomTemp', 80, [2]);
+
+        // Alte Links auf kopierte Temperaturen duerfen nicht mehr sichtbar sein.
+        foreach (['L_' . $key . 'Temperature', 'L_' . $key . 'TemperatureFloat',
+                  'L_' . $key . 'RoomTemperature'] as $legacyLink) {
+            // TemperatureFloat/RoomTemperature werden jetzt oben auf Originale umgestellt.
+            if ($legacyLink === 'L_' . $key . 'TemperatureFloat'
+                || $legacyLink === 'L_' . $key . 'RoomTemperature') { continue; }
+            $id = @IPS_GetObjectIDByIdent($legacyLink, $dummy);
+            if ($id !== false) { IPS_SetHidden($id, true); }
+        }
+
         $scheduleDummy = $this->EnsureDummy('Group' . $key . 'Schedule', 'Zeitsteuerung', $dummy, 100);
         $this->EnsureWeekplan($key, $scheduleDummy);
         $presetDummy = $this->EnsureDummy('Group' . $key . 'Presets', 'Ventiloeffnung je Stufe', $scheduleDummy, 20);
@@ -653,13 +660,17 @@ class HeizgeblaeseController extends IPSModule
             $this->DeleteLegacyChild($group, 'L_' . $key . 'Temperature');
             $this->DeleteLegacyChild($this->InstanceID, $key . 'Temperature');
             $this->DeleteLegacyChild($this->InstanceID, $key . 'RoomTemperatureLegacy');
+            // Diese Werte waren Kopien ohne die Original-Archivhistorie.
+            // Links im WebFront zeigen inzwischen auf die Originalvariablen.
+            $this->DeleteLegacyChild($this->InstanceID, $key . 'TemperatureFloat');
+            $this->DeleteLegacyChild($this->InstanceID, $key . 'RoomTemperature');
         }
     }
 
     private function BuildPumpWebfront()
     {
         $dummy = $this->EnsureDummy('GroupPump', 'Gemeinsame Pumpe', $this->InstanceID, 30);
-        $this->LinkVariable($dummy, 'PumpRunning', 'Pumpenstatus', 10);
+        $this->LinkOriginal($dummy, 'PumpRunning', 'Pumpenstatus', 'PumpSwitch', 10, [0]);
         $this->LinkVariable($dummy, 'PumpDiagnostic', 'Pumpendiagnose', 20);
         $this->LinkVariable($dummy, 'LastError', 'Letzter Fehler', 30);
     }
@@ -692,7 +703,6 @@ class HeizgeblaeseController extends IPSModule
                     $demand ? 'Pumpe erforderlich' : 'Kein Waermebedarf / Pumpe AUS');
             }
             // Tatsachenstatus (keine angenommene Sofortbestaetigung)
-            SetValueBoolean($this->GetIDForIdent('PumpRunning'), $this->ReadBool('PumpSwitch'));
         } catch (Throwable $e) {
             $this->Error('Pumpensteuerung: ' . $e->getMessage());
             SetValueString($this->GetIDForIdent('PumpDiagnostic'), 'FEHLER: ' . $e->getMessage());

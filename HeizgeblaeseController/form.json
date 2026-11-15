@@ -41,7 +41,7 @@
         {
           "type": "SelectVariable",
           "name": "WorkshopTemp",
-          "caption": "Ventil: Vorlauftemperatur"
+          "caption": "Ventil: Vorlauftemperatur (Float-Originalvariable / Archiv)"
         },
         {
           "type": "NumberSpinner",
@@ -53,7 +53,7 @@
         {
           "type": "SelectVariable",
           "name": "WorkshopRoomTemp",
-          "caption": "Raumtemperatur (optional)"
+          "caption": "Raumtemperatur (optional) (Float-Originalvariable / Archiv)"
         }
       ]
     },
@@ -79,7 +79,7 @@
         {
           "type": "SelectVariable",
           "name": "GarageTemp",
-          "caption": "Ventil: Vorlauftemperatur"
+          "caption": "Ventil: Vorlauftemperatur (Float-Originalvariable / Archiv)"
         },
         {
           "type": "NumberSpinner",
@@ -91,7 +91,7 @@
         {
           "type": "SelectVariable",
           "name": "GarageRoomTemp",
-          "caption": "Raumtemperatur (optional)"
+          "caption": "Raumtemperatur (optional) (Float-Originalvariable / Archiv)"
         }
       ]
     },
@@ -121,7 +121,7 @@
   "actions": [
     {
       "type": "Label",
-      "caption": "Zeitsteuerung: IP-Symcon-Wochenplan (Wochenuebersicht) pro Raum mit AUS und vier Profilen. Vorlauftemperatur wird als Float angezeigt."
+      "caption": "Wochenplan: AUS, Stufe 1, 2 und 3. Temperaturen, Ventil-Istposition und Pumpenstatus werden als Links auf Originalvariablen angezeigt."
     }
   ]
 }
