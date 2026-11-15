@@ -1,8 +1,15 @@
-HeizgeblaeseController v2.0
+HeizgeblaeseController v2.1
 
-Temperaturen (Float), Ventil-Istposition und Pumpenstatus werden ueber direkte Links auf die konfigurierten Originalvariablen angezeigt. Die Archivhistorie der Originalvariablen bleibt erhalten, sofern diese archiviert werden.
-Sollwerte, Betriebsarten, Wochenplaene, Pumpendiagnose und Modulsteuerung bleiben eigenstaendig. Keine Originalvariablen werden geloescht.
-Bestehende Wochenplaene werden nicht zurueckgesetzt.
-Vorsicht: direkte Links auf schaltbare Original-Aktoren koennen je nach WebFront Konfiguration weiterhin bedienbar sein und die Modulsteuerung umgehen.
+- Ventil-Istposition ist weiterhin ein direkter Link auf die Originalvariable.
+- Nur der Istpositions-Link in der Modulvisualisierung wird mit IPS_SetDisabled auf
+  nicht bedienbar gesetzt; Originalvariable und Aktionsfunktion bleiben unberuehrt.
+- Der zusaetzliche Link "Ventil | Aktueller Sollwert" wird entfernt.
+  Die interne Sollwertvariable wird von der Regelung weiterhin verwendet.
+- Die Archivierung der Originalvariable wird nicht veraendert.
 
-Update: Bisherige vom Modul erzeugte Temperatur-Kopien und Pumpenstatus-Kopie werden nach Umstellung auf Original-Links bereinigt.
+Hinweis: IPS_SetDisabled sperrt auch das Anklicken des Links. Abhaengig von
+WebFront-Version und Darstellung kann dadurch auch der direkte Zugriff auf
+die Historiengrafik ueber diesen Link entfallen. Die Archivdaten bleiben bei
+der Originalvariable erhalten und sind dort weiterhin abrufbar.
+
+Bestehende Wochenplaene und Sollwerte bleiben unangetastet.

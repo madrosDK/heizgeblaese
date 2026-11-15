@@ -552,7 +552,7 @@ class HeizgeblaeseController extends IPSModule
             $key === 'Workshop' ? 10 : 20);
         $items = [
             'Mode' => 'Betriebsart', 'Stage' => 'Luefterstufe', 'ValveTarget' => 'Ventil | Manuell',
-            'ActiveValve' => 'Ventil | Aktueller Sollwert', 'ActiveWindow' => 'Aktives Zeitfenster'
+            'ActiveWindow' => 'Aktives Zeitfenster'
         ];
         $pos = 10;
         foreach ($items as $suffix => $labelItem) {
@@ -561,8 +561,21 @@ class HeizgeblaeseController extends IPSModule
             if ($link !== false) { IPS_SetHidden($link, false); }
             $pos += 10;
         }
+        // Die Istposition ist eine reine Rueckmeldung. Den Link (nicht die
+        // Originalvariable!) fuer die Visualisierung deaktivieren, damit er
+        // keine Stellbefehle direkt am Ventil ausloesen kann.
         $this->LinkOriginal($dummy, $key . 'ValvePosition', 'Ventil | Istposition',
             $key . 'Valve', 60, [1, 2]);
+        $valvePositionLink = @IPS_GetObjectIDByIdent('L_' . $key . 'ValvePosition', $dummy);
+        if ($valvePositionLink !== false && IPS_GetObject($valvePositionLink)['ObjectType'] === 6) {
+            IPS_SetDisabled($valvePositionLink, true);
+        }
+        // Der aktive interne Sollwert wird fuer die Regelung weiter benoetigt,
+        // soll jedoch nicht als dritte Ventilanzeige im WebFront erscheinen.
+        $oldActiveValveLink = @IPS_GetObjectIDByIdent('L_' . $key . 'ActiveValve', $dummy);
+        if ($oldActiveValveLink !== false && IPS_GetObject($oldActiveValveLink)['ObjectType'] === 6) {
+            IPS_DeleteLink($oldActiveValveLink);
+        }
         $this->LinkOriginal($dummy, $key . 'TemperatureFloat', 'Vorlauftemperatur',
             $key . 'Temp', 70, [2]);
         $this->LinkOriginal($dummy, $key . 'RoomTemperature', 'Raumtemperatur',
