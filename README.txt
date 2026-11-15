@@ -39,3 +39,7 @@ WICHTIG
 - Vor dem Produktiveinsatz Hardwaretest durchführen, insbesondere AUS-Befehl,
   Verhalten bei MQTT-Verzögerungen und Relais-Stufenkombinationen.
 - PHP Syntax und JSON-Dateien geprüft; kein IP-Symcon Hardwaretest erfolgt.
+
+
+v1.4: native IPS Wochenplaene je Bereich, 4 Profile (Luefterstufe und Ventiloeffnung) im WebFront. Vorlauftemperatur als Float. Alte Zeitfenster einmalig migriert (falls noch kein Wochenplan), bleiben als Daten erhalten.
+Hinweis: Wochenplanaktionen loesen Refresh aus; periodischer Timer sichert auch externe Aenderungen ab.

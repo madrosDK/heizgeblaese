@@ -6,7 +6,7 @@
     },
     {
       "type": "Label",
-      "caption": "Zeitfenster jetzt direkt im WebFront unter Werkstatt / Garage → Zeitsteuerung einstellen. Bestehende V1.2 Zeitfenster werden einmalig importiert. Jeder Bereich bekommt eigene Dummy-Module."
+      "caption": "Zeitsteuerung ueber den nativen IP-Symcon-Wochenplan im WebFront: Aktion AUS oder Profil 1-4. Zu jedem Profil sind Stufe und Ventiloeffnung direkt im WebFront einstellbar. Alte v1.3-Zeitfenster werden einmalig uebernommen, wenn noch kein Wochenplan vorhanden ist."
     },
     {
       "type": "ExpansionPanel",
@@ -121,7 +121,7 @@
   "actions": [
     {
       "type": "Label",
-      "caption": "AUS: Gebläse und Ventil AUS. Manuell: Stufe 0–3 und gespeicherte Ventilöffnung. Zeitsteuerung: 4 individuelle Zeitfenster je Heizgebläse; außerhalb AUS. Auto: vorbereitet und vorläufig AUS. Pumpe EIN bei mindestens einem laufenden Gebläse."
+      "caption": "Zeitsteuerung: IP-Symcon-Wochenplan (Wochenuebersicht) pro Raum mit AUS und vier Profilen. Vorlauftemperatur wird als Float angezeigt."
     }
   ]
 }

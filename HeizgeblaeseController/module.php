@@ -50,9 +50,11 @@ class HeizgeblaeseController extends IPSModule
             }
             $this->RegisterVariableInteger($key . 'ActiveValve', $label . ' | Aktueller Ventil-Sollwert', 'HGC.ValvePercent', 40);
             $this->RegisterVariableString($key . 'ActiveWindow', $label . ' | Zeitfenster aktiv', '', 50);
-            $this->RegisterVariableInteger($key . 'Temperature', $label . ' | Vorlauftemperatur', '~Temperature', 60);
+            $this->RegisterVariableFloat($key . 'TemperatureFloat', $label . ' | Vorlauftemperatur', '~Temperature', 60);
             $this->RegisterVariableInteger($key . 'RoomTemperature', $label . ' | Raumtemperatur', '~Temperature', 65);
-            $this->BuildScheduleVariables($key);
+            $this->BuildScheduleVariables($key); // Nur als bestehende Daten fuer einmalige Migration behalten.
+            $legacyTemp = @IPS_GetObjectIDByIdent($key . 'Temperature', $this->InstanceID);
+            if ($legacyTemp !== false) { IPS_SetHidden($legacyTemp, true); }
             $this->BuildWebfront($key, $label);
         }
         $this->RegisterVariableBoolean('PumpRunning', 'Pumpe | Status', '~Switch', 70);
@@ -106,6 +108,10 @@ class HeizgeblaeseController extends IPSModule
             }
             if ($Ident === $key . 'Stage') {
                 $this->SetStage($key, (int) $Value);
+                return;
+            }
+            if (preg_match('/^' . $key . 'Preset([1-4])(Stage|Valve)$/', $Ident, $preset)) {
+                $this->SetPreset($key, (int) $preset[1], $preset[2], (int) $Value);
                 return;
             }
             if ($Ident === $key . 'ValveTarget') {
@@ -318,45 +324,148 @@ class HeizgeblaeseController extends IPSModule
         return (int) $match[1] * 60 + (int) $match[2];
     }
 
+    // IP-Symcon-Wochenplan ist die alleinige Quelle der Zeitsteuerung.
+    // Jede Aktion 1..4 ist ein einstellbares Profil aus Stufe und Ventiloeffnung.
+    // Aktion 0 ist AUS. Ohne Schaltpunkt gilt AUS; bei Tageswechsel wird der
+    // letzte Schaltpunkt der Vortage beruecksichtigt (ueber Mitternacht).
     private function FindWindow($key, $now)
     {
-        $rows = $this->ReadSchedule($key);
-        if (!is_array($rows)) {
-            throw new Exception('Zeitfensterkonfiguration ungueltig: ' . $key);
+        $id = @IPS_GetObjectIDByIdent('Weekplan', $this->GetIDForIdent('Group' . $key));
+        if ($id === false || !IPS_EventExists($id)) {
+            return null;
         }
-        $day = (int) date('N', $now);
-        $yesterday = $day === 1 ? 7 : $day - 1;
-        $minute = (int) date('G', $now) * 60 + (int) date('i', $now);
-        $winner = null;
-        // Bei Ueberschneidungen gewinnt das spaetere Fenster (hoehere Zeilennummer).
-        foreach (array_slice($rows, 0, 4) as $index => $row) {
-            if (!is_array($row) || empty($row['Enabled'])) {
-                continue;
-            }
-            $start = $this->Minutes($row['Start'] ?? '');
-            $end = $this->Minutes($row['End'] ?? '');
-            if ($start === $end) {
-                throw new Exception($key . ': Zeitfenster ' . ($index + 1) . ' hat gleiche Start- und Endzeit.');
-            }
-            $selector = (int) ($row['Days'] ?? 0);
-            if ($selector < 0 || $selector > 9) {
-                throw new Exception('Ungueltige Tagesauswahl im Zeitfenster.');
-            }
-            $active = $start < $end
-                ? ($minute >= $start && $minute < $end && $this->DayMatch($selector, $day))
-                : (($minute >= $start && $this->DayMatch($selector, $day))
-                    || ($minute < $end && $this->DayMatch($selector, $yesterday)));
-            if ($active) {
-                $stage = (int) ($row['Stage'] ?? 0);
-                $valve = (int) ($row['Valve'] ?? 0);
-                if ($stage < 0 || $stage > 3 || $valve < 0 || $valve > 100) {
-                    throw new Exception('Ungueltige Stufe oder Ventiloeffnung im Zeitfenster.');
+        $schedule = IPS_GetEvent($id);
+        if (empty($schedule['EventActive'])) {
+            return null;
+        }
+        $groups = $schedule['ScheduleGroups'] ?? [];
+        // Bis zu 7 Tage zurueck, damit Schaltpunkte ueber Mitternacht wirken.
+        for ($back = 0; $back < 7; $back++) {
+            $date = strtotime('-' . $back . ' day', strtotime(date('Y-m-d', $now)));
+            $daymask = 1 << ((int) date('N', $date) - 1);
+            $limit = $back === 0 ? ((int) date('G', $now) * 3600 + (int) date('i', $now) * 60 + (int) date('s', $now)) : 86400;
+            $bestTime = -1;
+            $action = null;
+            foreach ($groups as $group) {
+                if (((int) ($group['Days'] ?? 0) & $daymask) === 0) {
+                    continue;
                 }
-                $winner = ['Stage' => $stage, 'Valve' => $stage ? $valve : 0,
-                           'Text' => 'Fenster ' . ($index + 1) . ': ' . ($row['Start'] ?? '') . '–' . ($row['End'] ?? '')];
+                foreach (($group['Points'] ?? []) as $point) {
+                    $t = (int) ($point['Start']['Hour'] ?? 0) * 3600
+                        + (int) ($point['Start']['Minute'] ?? 0) * 60
+                        + (int) ($point['Start']['Second'] ?? 0);
+                    if ($t <= $limit && $t >= $bestTime) {
+                        $bestTime = $t;
+                        $action = (int) ($point['ActionID'] ?? 0);
+                    }
+                }
+            }
+            if ($action !== null) {
+                if ($action < 1 || $action > 4) {
+                    return null;
+                }
+                $stage = GetValueInteger($this->GetIDForIdent($key . 'Preset' . $action . 'Stage'));
+                $valve = GetValueInteger($this->GetIDForIdent($key . 'Preset' . $action . 'Valve'));
+                return ['Stage' => $stage, 'Valve' => $stage > 0 ? $valve : 0,
+                    'Text' => 'Profil ' . $action . ' (Wochenplan)'];
             }
         }
-        return $winner;
+        return null;
+    }
+
+    private function SetPreset($key, $slot, $field, $value)
+    {
+        $this->CheckKey($key);
+        $limit = $field === 'Stage' ? 3 : 100;
+        if ($value < 0 || $value > $limit) {
+            throw new Exception('Ungueltiger Profilwert.');
+        }
+        SetValueInteger($this->GetIDForIdent($key . 'Preset' . $slot . $field), $value);
+        if ($this->GetMode($key) === 2) {
+            $this->EvaluateSchedules();
+        }
+    }
+
+    // Vorhandene V1.3-Zeitfenster einmalig in den nativen Wochenplan uebertragen.
+    // Bestehende Wochenplaene und die alten Zeitfenster bleiben unveraendert.
+    private function MigrateLegacyWindows($key, $eventID)
+    {
+        $rows = $this->ReadSchedule($key);
+        $any = false;
+        foreach ($rows as $r) {
+            if (!empty($r['Enabled'])) { $any = true; break; }
+        }
+        if (!$any) { return; }
+        for ($n = 1; $n <= 4; $n++) {
+            $row = $rows[$n - 1];
+            $this->RegisterPresetValue($key, $n, 'Stage', (int) $row['Stage']);
+            $this->RegisterPresetValue($key, $n, 'Valve', (int) $row['Valve']);
+        }
+        for ($day = 1; $day <= 7; $day++) {
+            $prev = 0;
+            $pointID = 1;
+            for ($minute = 0; $minute < 1440; $minute++) {
+                $wanted = 0;
+                $yesterday = $day === 1 ? 7 : $day - 1;
+                foreach ($rows as $idx => $r) {
+                    if (empty($r['Enabled'])) { continue; }
+                    try {
+                        $from = $this->Minutes((string) $r['Start']);
+                        $to = $this->Minutes((string) $r['End']);
+                    } catch (Throwable $e) { continue; }
+                    if ($from === $to) { continue; }
+                    $selector = (int) $r['Days'];
+                    $match = $from < $to
+                        ? ($minute >= $from && $minute < $to && $this->DayMatch($selector, $day))
+                        : (($minute >= $from && $this->DayMatch($selector, $day))
+                            || ($minute < $to && $this->DayMatch($selector, $yesterday)));
+                    if ($match) { $wanted = $idx + 1; }
+                }
+                if ($minute === 0 || $wanted !== $prev) {
+                    IPS_SetEventScheduleGroupPoint($eventID, $day, $pointID++, intdiv($minute, 60), $minute % 60, 0, $wanted);
+                    $prev = $wanted;
+                }
+            }
+        }
+    }
+
+    private function RegisterPresetValue($key, $slot, $field, $value)
+    {
+        SetValueInteger($this->GetIDForIdent($key . 'Preset' . $slot . $field), $value);
+    }
+
+    private function EnsureWeekplan($key, $parent)
+    {
+        for ($n = 1; $n <= 4; $n++) {
+            foreach (['Stage' => ['Stufe', 'HGC.Stage', 1], 'Valve' => ['Ventiloeffnung', 'HGC.ValvePercent', 100]] as $field => $config) {
+                $ident = $key . 'Preset' . $n . $field;
+                $old = @IPS_GetObjectIDByIdent($ident, $this->InstanceID);
+                $this->RegisterVariableInteger($ident, 'Profil ' . $n . ' | ' . $config[0], $config[1], 200 + $n * 10);
+                $this->EnableAction($ident);
+                if ($old === false) {
+                    SetValueInteger($this->GetIDForIdent($ident), $config[2]);
+                }
+            }
+        }
+        $id = @IPS_GetObjectIDByIdent('Weekplan', $parent);
+        $fresh = $id === false;
+        if ($fresh) {
+            $id = IPS_CreateEvent(2);
+            IPS_SetParent($id, $parent);
+            IPS_SetIdent($id, 'Weekplan');
+            IPS_SetName($id, 'Wochenplan');
+            IPS_SetPosition($id, 10);
+            IPS_SetEventScheduleAction($id, 0, 'AUS', 0x777777, 'HGC_Refresh(' . $this->InstanceID . ');');
+            foreach ([1 => 0x2879C8, 2 => 0x39A672, 3 => 0xE6A23C, 4 => 0x9F70D1] as $index => $color) {
+                IPS_SetEventScheduleAction($id, $index, 'Profil ' . $index, $color, 'HGC_Refresh(' . $this->InstanceID . ');');
+            }
+            for ($day = 1; $day <= 7; $day++) {
+                IPS_SetEventScheduleGroup($id, $day, 1 << ($day - 1));
+            }
+            $this->MigrateLegacyWindows($key, $id);
+            IPS_SetEventActive($id, true);
+        }
+        return $id;
     }
 
     public function EvaluateSchedules()
@@ -418,7 +527,7 @@ class HeizgeblaeseController extends IPSModule
                 $known = false;
             }
             try {
-                SetValueInteger($this->GetIDForIdent($key . 'Temperature'), (int) round((float) GetValue($this->VariableID($key . 'Temp'))));
+                SetValueFloat($this->GetIDForIdent($key . 'TemperatureFloat'), (float) GetValue($this->VariableID($key . 'Temp')));
             } catch (Throwable $e) {
                 // Temperatur ist optional; bevorzugt Integer.
             }
@@ -560,31 +669,39 @@ class HeizgeblaeseController extends IPSModule
     {
         $dummy = $this->EnsureDummy('Group' . $key, $label, $this->InstanceID,
             $key === 'Workshop' ? 10 : 20);
+        $oldTempLink = @IPS_GetObjectIDByIdent('L_' . $key . 'Temperature', $dummy);
+        if ($oldTempLink !== false) { IPS_SetHidden($oldTempLink, true); }
         $items = [
             'Mode' => 'Betriebsart', 'Stage' => 'Luefterstufe', 'ValveTarget' => 'Ventil | Manuell',
             'ActiveValve' => 'Ventil | Aktueller Sollwert', 'ActiveWindow' => 'Aktives Zeitfenster',
-            'Temperature' => 'Vorlauftemperatur', 'RoomTemperature' => 'Raumtemperatur'
+            'TemperatureFloat' => 'Vorlauftemperatur', 'RoomTemperature' => 'Raumtemperatur'
         ];
         $pos = 10;
         foreach ($items as $suffix => $labelItem) {
             if ($suffix === 'RoomTemperature' && $this->ReadPropertyInteger($key . 'RoomTemp') <= 0) {
                 IPS_SetHidden($this->GetIDForIdent($key . $suffix), true);
+                $oldLink = @IPS_GetObjectIDByIdent('L_' . $key . $suffix, $dummy);
+                if ($oldLink !== false) { IPS_SetHidden($oldLink, true); }
                 continue;
             }
             $this->LinkVariable($dummy, $key . $suffix, $labelItem, $pos);
+            $link = @IPS_GetObjectIDByIdent('L_' . $key . $suffix, $dummy);
+            if ($link !== false) { IPS_SetHidden($link, false); }
             $pos += 10;
         }
         $scheduleDummy = $this->EnsureDummy('Group' . $key . 'Schedule', 'Zeitsteuerung', $dummy, 100);
+        $this->EnsureWeekplan($key, $scheduleDummy);
+        // Alte v1.3-Zeitfenster behalten, aber im WebFront ausblenden.
         for ($n = 1; $n <= 4; $n++) {
-            $windowDummy = $this->EnsureDummy('Group' . $key . 'Window' . $n,
-                'Zeitfenster ' . $n, $scheduleDummy, $n * 10);
-            $p = 10;
-            foreach (['Enabled' => 'Aktiv', 'Days' => 'Wochentage', 'Start' => 'Von',
-                      'End' => 'Bis', 'Stage' => 'Stufe', 'Valve' => 'Ventil (%)'] as $field => $title) {
-                $this->LinkVariable($windowDummy, $key . 'Window' . $n . $field, $title, $p);
-                $p += 10;
-            }
+            $old = @IPS_GetObjectIDByIdent('Group' . $key . 'Window' . $n, $scheduleDummy);
+            if ($old !== false) { IPS_SetHidden($old, true); }
         }
+        $presetDummy = $this->EnsureDummy('Group' . $key . 'Presets', 'Profile (Stufe und Ventil)', $scheduleDummy, 20);
+        for ($n = 1; $n <= 4; $n++) {
+            $this->LinkVariable($presetDummy, $key . 'Preset' . $n . 'Stage', 'Profil ' . $n . ' | Stufe', $n * 20);
+            $this->LinkVariable($presetDummy, $key . 'Preset' . $n . 'Valve', 'Profil ' . $n . ' | Ventil (%)', $n * 20 + 10);
+        }
+
     }
 
     private function BuildPumpWebfront()
