@@ -520,7 +520,43 @@ class HeizgeblaeseController extends IPSModule
             // Entfernen nur falls kein Schaltpunkt mehr auf Aktion 4 verweist.
             IPS_SetEventScheduleAction($id, 4, '', 0, '');
         }
+        // Der native Wochenplan kennt keine transparenten/ungenutzten Zeitbloecke:
+        // eine Aktion gilt bis zum naechsten Schaltpunkt. Deshalb erhaelt jeder
+        // Wochentag einen ausdruecklichen AUS-Schaltpunkt um 00:00, falls noch
+        // keiner vorhanden ist. Bestehende Schaltpunkte werden NICHT ueberschrieben.
+        // Dadurch wird keine Stufe aus dem Vortag ungewollt weitergefuehrt.
+        $this->EnsureDailyOffStart($id);
         return $id;
+    }
+
+    private function EnsureDailyOffStart($eventID)
+    {
+        $schedule = IPS_GetEvent($eventID);
+        foreach (($schedule['ScheduleGroups'] ?? []) as $group) {
+            $groupID = (int) ($group['ID'] ?? 0);
+            $hasMidnight = false;
+            $usedIDs = [];
+            foreach (($group['Points'] ?? []) as $point) {
+                $pid = (int) ($point['ID'] ?? $point['PointID'] ?? 0);
+                $usedIDs[$pid] = true;
+                $start = $point['Start'] ?? [];
+                if ((int) ($start['Hour'] ?? -1) === 0
+                    && (int) ($start['Minute'] ?? -1) === 0
+                    && (int) ($start['Second'] ?? -1) === 0) {
+                    $hasMidnight = true;
+                }
+            }
+            if ($hasMidnight) {
+                continue;
+            }
+            // Keine vorhandene ID verwenden: IP-Symcon identifiziert Punkte
+            // innerhalb einer Gruppe ausschliesslich ueber deren ID.
+            $newID = 1;
+            while (isset($usedIDs[$newID])) {
+                $newID++;
+            }
+            IPS_SetEventScheduleGroupPoint($eventID, $groupID, $newID, 0, 0, 0, 0);
+        }
     }
 
     public function EvaluateSchedules()

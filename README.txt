@@ -1,22 +1,24 @@
-HeizgeblaeseController v1.5 – IP-Symcon
+HeizgeblaeseController v1.6 – IP-Symcon
 
-AENDERUNGEN GEGENUEBER v1.4
-- Vorlauf- und Raumtemperatur werden als Float angezeigt. Bisherige Integer-Raumtemperatur-Variablen werden ausgeblendet und bleiben erhalten.
-- Werkstatt-/Garage-Zeitsteuerung im WebFront nur sichtbar, wenn jeweils Betriebsart Zeitsteuerung ausgewaehlt ist. Das aktive Zeitfenster wird sonst ebenfalls verborgen.
-- Der native Wochenplan kennt AUS, Stufe 1, Stufe 2 und Stufe 3. Die Stufen sind fest zugeordnet; je Stufe ist nur die Ventiloeffnung (0..100 %) konfigurierbar.
-- Wo kein Zeit-Schaltpunkt gefunden wird, wird AUS verwendet. Um Luecken zwischen geplanten Zeiten zu erzeugen, im Wochenplan explizit AUS setzen; sonst bleibt die zuletzt aktive Wochenplanaktion bestehen (normales IPS-Wochenplanverhalten).
-- Waehrend Zeitsteuerung ist eine manuelle Geblaesestufenwahl (0..3) moeglich. Diese uebersteuert voruebergehend die Zeitsteuerung und bleibt bis zum naechsten Schaltpunkt bestehen. Die manuell gespeicherte Ventiloeffnung wird dabei verwendet.
-- Manuelle Ventil-Sollwertaenderung waehrend einer solchen Uebersteuerung wirkt sofort. Danach uebernimmt wieder der Wochenplan.
-- Bestehende Wochenplan-Schaltpunkte mit Profil 4 werden bei der Umstellung auf Stufe 3 umgestellt, sofern die Ereignispunkte aktualisierbar sind. Die alten Profilvariablen bleiben verborgen erhalten. Vorhandene sonstige Zeitplanpunkte werden nicht geloescht.
+AENDERUNG GEGENUEBER v1.5
+- Bei Erstellung eines Wochenplans wird an jedem Tag um 00:00 die Aktion AUS
+  als Grundzustand angelegt. Bei bestehenden Wochenplaenen wird dieser
+  Schaltpunkt nur ergaenzt, wenn am Tagesanfang noch kein Punkt existiert.
+- Vorhandene Schaltpunkte und ausdruecklich eingestellte Stufen werden nicht
+  veraendert oder automatisch zurueckgesetzt.
+- Grund: IP-Symcons nativer Wochenplan hat keine leeren Zeitbereiche. Jede
+  Aktion gilt bis zur naechsten. Ein gruen markierter Bereich ist Stufe 2,
+  orange markierte Bereiche sind bereits als Stufe 3 hinterlegt und damit
+  NICHT automatisch als AUS erkennbar. Bestehende orange Abschnitte, die AUS
+  sein sollen, einmalig im Wochenplan auf AUS umstellen; auch am Ende eines
+  Heizintervalls einen AUS-Schaltpunkt setzen.
+- Alle anderen Funktionen aus v1.5 bleiben erhalten.
 
-BETRIEBSARTEN
-AUS: Geblaese aus und Ventil zu.
-MANUELL: Stufe und Ventil manuell.
-ZEITSTEUERUNG: Wochenplan + voruebergehende manuelle Uebersteuerung.
-AUTO: reserviert, derzeit AUS.
+HINWEIS
+Die Grundstellung AUS um 00:00 beendet absichtlich eine ueber Mitternacht
+laufende Stufe. Bei geplanten Nachtintervallen muss die Stufe auch nach 00:00
+explizit gesetzt werden.
 
 SICHERHEIT
-Pumpe laeuft sobald eine Stufe aktiv ist. Die Steuerung bestaetigt weder realen Pumpenanlauf noch realen Durchfluss. Die bestehende zyklische Pumpenpruefung bleibt erhalten. Schaltfolge am Geraet unter Aufsicht testen. Es wurden PHP-Syntax und JSON-Struktur geprueft, kein realer IP-Symcon-Hardwaretest.
-
-INSTALLATION
-Modul im bestehenden IP-Symcon-Modul-Repository aktualisieren, Instanz uebernehmen. Vorhandene Instanzvariablen und Wochenplanpunkte bleiben erhalten, mit der dokumentierten Umstellung von Aktion 4 auf 3.
+Keine geaenderten Stufen beim Update; Test in IP-Symcon und an der Hardware
+noch erforderlich. Vor dem Update Konfiguration sichern.
