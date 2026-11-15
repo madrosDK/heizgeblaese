@@ -499,10 +499,11 @@ class HeizgeblaeseController extends IPSModule
         foreach ([1 => 0x2879C8, 2 => 0x39A672, 3 => 0xE6A23C] as $index => $color) {
             IPS_SetEventScheduleAction($id, $index, 'Stufe ' . $index, $color, 'HGC_Refresh(' . $this->InstanceID . ');');
         }
-        // Letzte Aktion bewusst AUS, damit beim Anlegen neuer Bereiche nicht
-        // Stufe 3 als letzte/Standardaktion angeboten wird.
+        // Letzte Aktion ebenfalls AUS, mit EINDEUTIGER Farbe. Symcon erlaubt
+        // keine gleiche Aktionsfarbe bei unterschiedlichen ActionIDs.
+        // Der Editor kann dadurch AUS statt Stufe 3 als Standard anbieten.
         // Aktion 0 bleibt als AUS bestehen fuer bestehende Schaltpunkte.
-        IPS_SetEventScheduleAction($id, 4, 'AUS', 0x777777, 'HGC_Refresh(' . $this->InstanceID . ');');
+        IPS_SetEventScheduleAction($id, 4, 'AUS (Standard)', 0x777778, 'HGC_Refresh(' . $this->InstanceID . ');');
         if ($fresh) {
             $this->MigrateLegacyWindows($key, $id);
             IPS_SetEventActive($id, true);
