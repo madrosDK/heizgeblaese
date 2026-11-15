@@ -7,7 +7,8 @@ class HeizgeblaeseController extends IPSModule
     {
         parent::Create();
         foreach (['PumpSwitch', 'WorkshopOut1', 'WorkshopOut2', 'WorkshopValve', 'WorkshopTemp',
-                  'GarageOut1', 'GarageOut2', 'GarageValve', 'GarageTemp'] as $property) {
+                  'GarageOut1', 'GarageOut2', 'GarageValve', 'GarageTemp',
+                  'WorkshopRoomTemp', 'GarageRoomTemp'] as $property) {
             $this->RegisterPropertyInteger($property, 0);
         }
         $this->RegisterPropertyInteger('WorkshopValveDefault', 100);
@@ -50,9 +51,15 @@ class HeizgeblaeseController extends IPSModule
             $this->RegisterVariableInteger($key . 'ActiveValve', $label . ' | Aktueller Ventil-Sollwert', 'HGC.ValvePercent', 40);
             $this->RegisterVariableString($key . 'ActiveWindow', $label . ' | Zeitfenster aktiv', '', 50);
             $this->RegisterVariableInteger($key . 'Temperature', $label . ' | Vorlauftemperatur', '~Temperature', 60);
+            $this->RegisterVariableInteger($key . 'RoomTemperature', $label . ' | Raumtemperatur', '~Temperature', 65);
+            $this->BuildScheduleVariables($key);
+            $this->BuildWebfront($key, $label);
         }
         $this->RegisterVariableBoolean('PumpRunning', 'Pumpe | Status', '~Switch', 70);
         $this->RegisterVariableString('LastError', 'Letzte Fehlermeldung', '', 80);
+        $this->RegisterVariableString('PumpDiagnostic', 'Pumpe | Diagnose', '', 75);
+        $this->BuildPumpWebfront();
+        // Betriebs-Sollwerte nicht durch Konfigurationsspeicherung zuruecksetzen.
         // Beim Speichern oder Neustart keine Relais/Aktoren schalten.
         // Der Timer uebernimmt anschliessend die zeitabhaengige Regelung.
         $this->SetTimerInterval('Refresh', max(2, min(3600, $this->ReadPropertyInteger('RefreshSeconds'))) * 1000);
@@ -74,6 +81,14 @@ class HeizgeblaeseController extends IPSModule
         IPS_SetVariableProfileValues('HGC.Mode', 0, 3, 1);
         foreach ([0 => 'AUS', 1 => 'Manuell', 2 => 'Zeitsteuerung', 3 => 'Auto (vorbereitet)'] as $index => $caption) {
             IPS_SetVariableProfileAssociation('HGC.Mode', $index, $caption, '', 0);
+        }
+        if (!IPS_VariableProfileExists('HGC.Days')) {
+            IPS_CreateVariableProfile('HGC.Days', 1);
+        }
+        IPS_SetVariableProfileValues('HGC.Days', 0, 9, 1);
+        foreach ([0 => 'Täglich', 1 => 'Mo–Fr', 2 => 'Sa–So', 3 => 'Montag', 4 => 'Dienstag',
+                  5 => 'Mittwoch', 6 => 'Donnerstag', 7 => 'Freitag', 8 => 'Samstag', 9 => 'Sonntag'] as $v => $name) {
+            IPS_SetVariableProfileAssociation('HGC.Days', $v, $name, '', 0);
         }
         if (!IPS_VariableProfileExists('HGC.ValvePercent')) {
             IPS_CreateVariableProfile('HGC.ValvePercent', 1);
@@ -97,6 +112,10 @@ class HeizgeblaeseController extends IPSModule
                 $this->SetValveTarget($key, (int) $Value);
                 return;
             }
+        }
+        if (preg_match('/^(Workshop|Garage)Window([1-4])(Enabled|Days|Start|End|Stage|Valve)$/', $Ident, $matches)) {
+            $this->SetWindowField($matches[1], (int) $matches[2], $matches[3], $Value);
+            return;
         }
         throw new Exception('Unbekannte Aktion: ' . $Ident);
     }
@@ -145,7 +164,8 @@ class HeizgeblaeseController extends IPSModule
         } else {
             throw new Exception('Ungeeigneter Variablentyp: ' . $property);
         }
-        if (!RequestAction($id, $value)) {
+        $result = RequestAction($id, $value);
+        if ($result === false) {
             throw new Exception('Schaltaktion fehlgeschlagen: ' . $property . ' (ID ' . $id . ')');
         }
     }
@@ -243,6 +263,10 @@ class HeizgeblaeseController extends IPSModule
         $stage = max(0, min(3, (int) $stage));
         $valve = $stage > 0 ? max(0, min(100, (int) $valve)) : 0;
         $old = $this->CurrentStage($key);
+        // Gewuenschte Stufe puffern: MQTT-Rueckmeldungen koennen verzoegert eintreffen.
+        if ($stage > 0) {
+            $this->SetBuffer($key . 'DemandStage', (string) $stage);
+        }
         $other = $key === 'Workshop' ? 'Garage' : 'Workshop';
         if ($stage > 0) {
             // Vor jedem Relais-EIN Pumpe anfordern, Ventil auf Ziel bringen.
@@ -267,10 +291,11 @@ class HeizgeblaeseController extends IPSModule
         if ($stage === 0) {
             $this->WriteIfDifferent($key . 'Valve', 0);
         }
-        // Pumpe ausschalten ausschliesslich wenn beide Geblaese verifizierbar AUS.
-        if ($stage === 0 && $this->CurrentStage('Workshop') === 0 && $this->CurrentStage('Garage') === 0) {
-            $this->WriteIfDifferent('PumpSwitch', false);
+        if ($stage === 0) {
+            $this->SetBuffer($key . 'DemandStage', '0');
         }
+        // Auch bei bereits ausgeschalteten Geblaesen Pumpenstatus zyklisch pruefen.
+        $this->ReconcilePump();
         SetValueInteger($this->GetIDForIdent($key . 'Stage'), $this->CurrentStage($key));
         SetValueInteger($this->GetIDForIdent($key . 'ActiveValve'), $valve);
         $this->RefreshStatus();
@@ -295,7 +320,7 @@ class HeizgeblaeseController extends IPSModule
 
     private function FindWindow($key, $now)
     {
-        $rows = json_decode($this->ReadPropertyString($key . 'Schedule'), true);
+        $rows = $this->ReadSchedule($key);
         if (!is_array($rows)) {
             throw new Exception('Zeitfensterkonfiguration ungueltig: ' . $key);
         }
@@ -399,16 +424,209 @@ class HeizgeblaeseController extends IPSModule
             }
         }
         try {
-            $pump = $this->ReadBool('PumpSwitch');
-            SetValueBoolean($this->GetIDForIdent('PumpRunning'), $pump);
-            if ($known && $on && !$pump && $this->ReadPropertyBoolean('PumpWatchdog')) {
-                $this->Write('PumpSwitch', true);
-                SetValueBoolean($this->GetIDForIdent('PumpRunning'), true);
+            $roomMap = ['Workshop' => 'WorkshopRoomTemp', 'Garage' => 'GarageRoomTemp'];
+            foreach ($roomMap as $key => $property) {
+                if ($this->ReadPropertyInteger($property) > 0) {
+                    $temperature = (int) round((float) GetValue($this->VariableID($property)));
+                    SetValueInteger($this->GetIDForIdent($key . 'RoomTemperature'), $temperature);
+                }
             }
         } catch (Throwable $e) {
-            if ($known && $on) {
-                $this->Error('Pumpe bei laufendem Geblaese nicht bestaetigt: ' . $e->getMessage());
+            $this->Error('Raumtemperatur nicht lesbar: ' . $e->getMessage());
+        }
+        $this->ReconcilePump();
+    }
+
+    // Zeitfenster werden als editierbare Modulvariablen angelegt, keine Konfigurationseingaben.
+    // Vorhandene V1.2-Zeitfenster werden bei der erstmaligen Anlage einmalig uebernommen.
+    private function BuildScheduleVariables($key)
+    {
+        $defaults = json_decode($this->ReadPropertyString($key . 'Schedule'), true);
+        if (!is_array($defaults)) {
+            $defaults = [];
+        }
+        for ($n = 1; $n <= 4; $n++) {
+            $row = $defaults[$n - 1] ?? [];
+            $spec = [
+                'Enabled' => [0, 'Aktiv', '', (bool) ($row['Enabled'] ?? false)],
+                'Days' => [1, 'Wochentage', 'HGC.Days', (int) ($row['Days'] ?? 0)],
+                'Start' => [3, 'Beginn (HH:MM)', '', (string) ($row['Start'] ?? '06:00')],
+                'End' => [3, 'Ende (HH:MM)', '', (string) ($row['End'] ?? '08:00')],
+                'Stage' => [1, 'Luefterstufe', 'HGC.Stage', (int) ($row['Stage'] ?? 1)],
+                'Valve' => [1, 'Ventiloeffnung', 'HGC.ValvePercent', (int) ($row['Valve'] ?? 100)]
+            ];
+            $position = 100 + $n * 10;
+            foreach ($spec as $field => $item) {
+                $ident = $key . 'Window' . $n . $field;
+                $exists = @IPS_GetObjectIDByIdent($ident, $this->InstanceID) !== false;
+                $label = 'Zeitfenster ' . $n . ' | ' . $item[1];
+                if ($item[0] === 0) {
+                    $this->RegisterVariableBoolean($ident, $label, $item[2], $position++);
+                } elseif ($item[0] === 1) {
+                    $this->RegisterVariableInteger($ident, $label, $item[2], $position++);
+                } else {
+                    $this->RegisterVariableString($ident, $label, $item[2], $position++);
+                }
+                $this->EnableAction($ident);
+                if (!$exists) {
+                    SetValue($this->GetIDForIdent($ident), $item[3]);
+                }
             }
+        }
+    }
+
+    private function ReadSchedule($key)
+    {
+        $rows = [];
+        foreach (range(1, 4) as $n) {
+            $row = [];
+            foreach (['Enabled', 'Days', 'Start', 'End', 'Stage', 'Valve'] as $field) {
+                $row[$field] = GetValue($this->GetIDForIdent($key . 'Window' . $n . $field));
+            }
+            $rows[] = $row;
+        }
+        return $rows;
+    }
+
+    private function SetWindowField($key, $n, $field, $value)
+    {
+        $this->CheckKey($key);
+        $id = $this->GetIDForIdent($key . 'Window' . $n . $field);
+        if (in_array($field, ['Start', 'End'], true)) {
+            $this->Minutes((string) $value);
+            $value = (string) $value;
+        } elseif ($field === 'Enabled') {
+            $value = (bool) $value;
+        } else {
+            $value = (int) $value;
+            $maximum = ['Days' => 9, 'Stage' => 3, 'Valve' => 100][$field];
+            if ($value < 0 || $value > $maximum) {
+                throw new Exception('Zeitfenster: Wert ausserhalb des erlaubten Bereichs.');
+            }
+        }
+        if (GetValue($id) === $value) {
+            return;
+        }
+        // Keine ungueltige Zeitspanne aktivieren (Eingabe von Start/Ende bei inaktivem Fenster erlaubt).
+        if ($field === 'Enabled' && $value) {
+            $prefix = $key . 'Window' . $n;
+            if (GetValueString($this->GetIDForIdent($prefix . 'Start')) === GetValueString($this->GetIDForIdent($prefix . 'End'))) {
+                throw new Exception('Start und Ende muessen unterschiedlich sein.');
+            }
+        }
+        SetValue($id, $value);
+        if ($this->GetMode($key) === 2) {
+            $this->EvaluateSchedules();
+        }
+    }
+
+    // Modulvariablen bleiben direkt unter dem Controller, damit EnableAction/RequestAction
+    // wie zuvor funktionieren. Sichtbare Links werden in Dummy-Modulen gruppiert.
+    private function EnsureDummy($ident, $name, $parentID, $position)
+    {
+        $id = @IPS_GetObjectIDByIdent($ident, $parentID);
+        if ($id === false) {
+            $id = IPS_CreateInstance('{485D0419-BE97-4548-AA9C-C083EB82E61E}');
+            IPS_SetParent($id, $parentID);
+            IPS_SetIdent($id, $ident);
+            IPS_ApplyChanges($id);
+        }
+        IPS_SetName($id, $name);
+        IPS_SetPosition($id, $position);
+        return $id;
+    }
+
+    private function EnsureLink($parent, $ident, $name, $target, $position)
+    {
+        $id = @IPS_GetObjectIDByIdent($ident, $parent);
+        if ($id === false) {
+            $id = IPS_CreateLink();
+            IPS_SetParent($id, $parent);
+            IPS_SetIdent($id, $ident);
+        }
+        IPS_SetName($id, $name);
+        IPS_SetPosition($id, $position);
+        IPS_SetLinkTargetID($id, $target);
+    }
+
+    private function LinkVariable($parent, $ident, $display, $position)
+    {
+        $variable = $this->GetIDForIdent($ident);
+        IPS_SetHidden($variable, true);
+        $this->EnsureLink($parent, 'L_' . $ident, $display, $variable, $position);
+    }
+
+    private function BuildWebfront($key, $label)
+    {
+        $dummy = $this->EnsureDummy('Group' . $key, $label, $this->InstanceID,
+            $key === 'Workshop' ? 10 : 20);
+        $items = [
+            'Mode' => 'Betriebsart', 'Stage' => 'Luefterstufe', 'ValveTarget' => 'Ventil | Manuell',
+            'ActiveValve' => 'Ventil | Aktueller Sollwert', 'ActiveWindow' => 'Aktives Zeitfenster',
+            'Temperature' => 'Vorlauftemperatur', 'RoomTemperature' => 'Raumtemperatur'
+        ];
+        $pos = 10;
+        foreach ($items as $suffix => $labelItem) {
+            if ($suffix === 'RoomTemperature' && $this->ReadPropertyInteger($key . 'RoomTemp') <= 0) {
+                IPS_SetHidden($this->GetIDForIdent($key . $suffix), true);
+                continue;
+            }
+            $this->LinkVariable($dummy, $key . $suffix, $labelItem, $pos);
+            $pos += 10;
+        }
+        $scheduleDummy = $this->EnsureDummy('Group' . $key . 'Schedule', 'Zeitsteuerung', $dummy, 100);
+        for ($n = 1; $n <= 4; $n++) {
+            $windowDummy = $this->EnsureDummy('Group' . $key . 'Window' . $n,
+                'Zeitfenster ' . $n, $scheduleDummy, $n * 10);
+            $p = 10;
+            foreach (['Enabled' => 'Aktiv', 'Days' => 'Wochentage', 'Start' => 'Von',
+                      'End' => 'Bis', 'Stage' => 'Stufe', 'Valve' => 'Ventil (%)'] as $field => $title) {
+                $this->LinkVariable($windowDummy, $key . 'Window' . $n . $field, $title, $p);
+                $p += 10;
+            }
+        }
+    }
+
+    private function BuildPumpWebfront()
+    {
+        $dummy = $this->EnsureDummy('GroupPump', 'Gemeinsame Pumpe', $this->InstanceID, 30);
+        $this->LinkVariable($dummy, 'PumpRunning', 'Pumpenstatus', 10);
+        $this->LinkVariable($dummy, 'PumpDiagnostic', 'Pumpendiagnose', 20);
+        $this->LinkVariable($dummy, 'LastError', 'Letzter Fehler', 30);
+    }
+
+    // Wesentlicher Fix gegen Dauerlauf: auch wenn beide Luefter schon AUS sind,
+    // im zyklischen Refresh pumpenschaltzustand erneut pruefen und AUS anfordern.
+    private function ReconcilePump()
+    {
+        try {
+            $workshop = $this->CurrentStage('Workshop');
+            $garage = $this->CurrentStage('Garage');
+        } catch (Throwable $e) {
+            SetValueString($this->GetIDForIdent('PumpDiagnostic'),
+                'Pumpe nicht automatisch ausgeschaltet: Geblaesezustand unbekannt (' . $e->getMessage() . ')');
+            return; // Im Zweifelsfall nie die Pumpe unter einem laufenden Luefter ausschalten.
+        }
+        try {
+            $pump = $this->ReadBool('PumpSwitch');
+            $demand = $workshop > 0 || $garage > 0
+                || (int) $this->GetBuffer('WorkshopDemandStage') > 0
+                || (int) $this->GetBuffer('GarageDemandStage') > 0;
+            if (!$demand && $pump) {
+                $this->Write('PumpSwitch', false);
+                SetValueString($this->GetIDForIdent('PumpDiagnostic'), 'AUS angefordert: beide Luefter AUS');
+            } elseif ($demand && !$pump && $this->ReadPropertyBoolean('PumpWatchdog')) {
+                $this->Write('PumpSwitch', true);
+                SetValueString($this->GetIDForIdent('PumpDiagnostic'), 'EIN angefordert: Luefter aktiv');
+            } else {
+                SetValueString($this->GetIDForIdent('PumpDiagnostic'),
+                    $demand ? 'Pumpe erforderlich' : 'Kein Waermebedarf / Pumpe AUS');
+            }
+            // Tatsachenstatus (keine angenommene Sofortbestaetigung)
+            SetValueBoolean($this->GetIDForIdent('PumpRunning'), $this->ReadBool('PumpSwitch'));
+        } catch (Throwable $e) {
+            $this->Error('Pumpensteuerung: ' . $e->getMessage());
+            SetValueString($this->GetIDForIdent('PumpDiagnostic'), 'FEHLER: ' . $e->getMessage());
         }
     }
 
