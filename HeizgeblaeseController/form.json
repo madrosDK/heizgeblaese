@@ -6,7 +6,7 @@
     },
     {
       "type": "Label",
-      "caption": "Zeitsteuerung ueber den nativen IP-Symcon-Wochenplan im WebFront: Aktion AUS oder Profil 1-4. Zu jedem Profil sind Stufe und Ventiloeffnung direkt im WebFront einstellbar. Alte v1.3-Zeitfenster werden einmalig uebernommen, wenn noch kein Wochenplan vorhanden ist."
+      "caption": "Zeitsteuerung: nativer Wochenplan im WebFront mit AUS sowie Stufe 1, 2, 3. Je Stufe eine Ventiloeffnung. Im Zeitmodus kann die Stufe manuell bis zum naechsten Schaltpunkt uebersteuert werden. Die Zeitsteuerung wird in anderen Modi ausgeblendet."
     },
     {
       "type": "ExpansionPanel",

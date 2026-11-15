@@ -1,45 +1,22 @@
-HeizgeblaeseController v1.3 - IP-Symcon
+HeizgeblaeseController v1.5 – IP-Symcon
 
-NEU
-- Zeitfenster direkt im WebFront editierbar. Je 4 pro Bereich (Aktiv, Wochentage,
-  Start HH:MM, Ende HH:MM, Stufe 0-3, Ventil 0-100%).
-- Dummy-Module Werkstatt und Garage, darin jeweils ein Dummy Zeitsteuerung
-  und je vier Zeitfenster-Dummys. Original-Modulvariablen bleiben für
-  die internen RequestAction-Aktionen am Controller, WebFront-Links führen
-  zu ihnen. Auch die Pumpe hat einen separaten Dummy.
-- Neue optionale Raumtemperaturvariable je Raum, Darstellung in Grad Celsius
-  als Integer; wenn nicht konfiguriert, wird der Wert nicht eingeblendet.
-- Pumpenstatus wird bei jeder Aktualisierung geprüft. Ist bei beiden
-  Lüftern der tatsächliche Status AUS und keine Einschaltanforderung aktiv,
-  wird die Pumpe auch dann AUS angefordert, wenn die Lüfter schon vorher
-  ausgeschaltet waren. Diagnosefeld im Dummy 'Gemeinsame Pumpe'.
-- Verzögerte MQTT-Rückmeldungen: interne Soll-Stufen verhindern, dass die
-  Pumpe unmittelbar nach einem Lüfter-EIN unbeabsichtigt ausgeschaltet wird.
-
-BESTEHENDE V1.2-INSTANZEN
-- Die bisherigen vier Zeitfenster der Konfiguration werden beim ersten Update
-  einmalig in WebFront-Variablen importiert. Danach werden sie nur mehr
-  dort editiert. Einstellungen der übrigen Variablen bleiben bestehen.
-- Keine automatische Löschung bestehender Daten.
+AENDERUNGEN GEGENUEBER v1.4
+- Vorlauf- und Raumtemperatur werden als Float angezeigt. Bisherige Integer-Raumtemperatur-Variablen werden ausgeblendet und bleiben erhalten.
+- Werkstatt-/Garage-Zeitsteuerung im WebFront nur sichtbar, wenn jeweils Betriebsart Zeitsteuerung ausgewaehlt ist. Das aktive Zeitfenster wird sonst ebenfalls verborgen.
+- Der native Wochenplan kennt AUS, Stufe 1, Stufe 2 und Stufe 3. Die Stufen sind fest zugeordnet; je Stufe ist nur die Ventiloeffnung (0..100 %) konfigurierbar.
+- Wo kein Zeit-Schaltpunkt gefunden wird, wird AUS verwendet. Um Luecken zwischen geplanten Zeiten zu erzeugen, im Wochenplan explizit AUS setzen; sonst bleibt die zuletzt aktive Wochenplanaktion bestehen (normales IPS-Wochenplanverhalten).
+- Waehrend Zeitsteuerung ist eine manuelle Geblaesestufenwahl (0..3) moeglich. Diese uebersteuert voruebergehend die Zeitsteuerung und bleibt bis zum naechsten Schaltpunkt bestehen. Die manuell gespeicherte Ventiloeffnung wird dabei verwendet.
+- Manuelle Ventil-Sollwertaenderung waehrend einer solchen Uebersteuerung wirkt sofort. Danach uebernimmt wieder der Wochenplan.
+- Bestehende Wochenplan-Schaltpunkte mit Profil 4 werden bei der Umstellung auf Stufe 3 umgestellt, sofern die Ereignispunkte aktualisierbar sind. Die alten Profilvariablen bleiben verborgen erhalten. Vorhandene sonstige Zeitplanpunkte werden nicht geloescht.
 
 BETRIEBSARTEN
-0 AUS: Lüfter AUS, Ventil 0%.
-1 MANUELL: Lüfterstufe 0..3; gespeicherter Ventilsollwert wird bei EIN
-  eingestellt und bei AUS NICHT überschrieben.
-2 ZEITSTEUERUNG: unabhängig je Raum; außerhalb der aktiven Fenster AUS.
-3 AUTO: bisher nicht implementiert, bleibt AUS.
+AUS: Geblaese aus und Ventil zu.
+MANUELL: Stufe und Ventil manuell.
+ZEITSTEUERUNG: Wochenplan + voruebergehende manuelle Uebersteuerung.
+AUTO: reserviert, derzeit AUS.
 
-WICHTIG
-- PumpSwitch muss auf die tatsächlich SCHALTBARE Boolean-STATUSVARIABLE
-  des Pumpenaktors zeigen, nicht auf dessen Instanz-ID.
-- Beide Lüfterausgänge müssen schaltbare Boolean-Variablen sein.
-- Bei unbekannten Lüfterzuständen wird Pumpe aus Sicherheitsgründen nicht
-  automatisch ausgeschaltet; Diagnosefeld zeigt die Ursache.
-- Die Modullogik allein überwacht keinen Durchfluss oder realen Pumpenanlauf.
-- Vor dem Produktiveinsatz Hardwaretest durchführen, insbesondere AUS-Befehl,
-  Verhalten bei MQTT-Verzögerungen und Relais-Stufenkombinationen.
-- PHP Syntax und JSON-Dateien geprüft; kein IP-Symcon Hardwaretest erfolgt.
+SICHERHEIT
+Pumpe laeuft sobald eine Stufe aktiv ist. Die Steuerung bestaetigt weder realen Pumpenanlauf noch realen Durchfluss. Die bestehende zyklische Pumpenpruefung bleibt erhalten. Schaltfolge am Geraet unter Aufsicht testen. Es wurden PHP-Syntax und JSON-Struktur geprueft, kein realer IP-Symcon-Hardwaretest.
 
-
-v1.4: native IPS Wochenplaene je Bereich, 4 Profile (Luefterstufe und Ventiloeffnung) im WebFront. Vorlauftemperatur als Float. Alte Zeitfenster einmalig migriert (falls noch kein Wochenplan), bleiben als Daten erhalten.
-Hinweis: Wochenplanaktionen loesen Refresh aus; periodischer Timer sichert auch externe Aenderungen ab.
+INSTALLATION
+Modul im bestehenden IP-Symcon-Modul-Repository aktualisieren, Instanz uebernehmen. Vorhandene Instanzvariablen und Wochenplanpunkte bleiben erhalten, mit der dokumentierten Umstellung von Aktion 4 auf 3.
