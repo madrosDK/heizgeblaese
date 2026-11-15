@@ -1,0 +1,11 @@
+{
+  "id": "{A2D5E876-5C49-4A10-8B6E-2DB8BA9EE4F1}",
+  "name": "HeizgeblaeseController",
+  "type": 3,
+  "vendor": "",
+  "aliases": ["Heizgeblaese Steuerung"],
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "HGC"
+}
