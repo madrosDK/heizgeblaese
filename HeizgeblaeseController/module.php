@@ -15,15 +15,6 @@ class HeizgeblaeseController extends IPSModule
         $this->RegisterPropertyInteger('GarageValveDefault', 100);
         $this->RegisterPropertyInteger('RefreshSeconds', 10);
         $this->RegisterPropertyBoolean('PumpWatchdog', true);
-        foreach (['Workshop', 'Garage'] as $key) {
-            $default = [];
-            for ($i = 0; $i < 4; $i++) {
-                $default[] = ['Enabled' => false, 'Days' => 0,
-                    'Start' => sprintf('%02d:00', 6 + 3 * $i),
-                    'End' => sprintf('%02d:00', 8 + 3 * $i), 'Stage' => 1, 'Valve' => 100];
-            }
-            $this->RegisterPropertyString($key . 'Schedule', json_encode($default));
-        }
         $this->RegisterTimer('Refresh', 0, 'HGC_Refresh($_IPS[\'TARGET\']);');
     }
 
@@ -58,7 +49,6 @@ class HeizgeblaeseController extends IPSModule
                 IPS_SetHidden($oldRoom, true);
             }
             $this->RegisterVariableFloat($key . 'RoomTemperature', $label . ' | Raumtemperatur', '~Temperature', 65);
-            $this->BuildScheduleVariables($key); // Nur als bestehende Daten fuer einmalige Migration behalten.
             $legacyTemp = @IPS_GetObjectIDByIdent($key . 'Temperature', $this->InstanceID);
             if ($legacyTemp !== false) { IPS_SetHidden($legacyTemp, true); }
             $this->BuildWebfront($key, $label);
@@ -67,6 +57,7 @@ class HeizgeblaeseController extends IPSModule
         $this->RegisterVariableString('LastError', 'Letzte Fehlermeldung', '', 80);
         $this->RegisterVariableString('PumpDiagnostic', 'Pumpe | Diagnose', '', 75);
         $this->BuildPumpWebfront();
+        $this->CleanupLegacyObjects();
         // Betriebs-Sollwerte nicht durch Konfigurationsspeicherung zuruecksetzen.
         // Beim Speichern oder Neustart keine Relais/Aktoren schalten.
         // Der Timer uebernimmt anschliessend die zeitabhaengige Regelung.
@@ -89,14 +80,6 @@ class HeizgeblaeseController extends IPSModule
         IPS_SetVariableProfileValues('HGC.Mode', 0, 3, 1);
         foreach ([0 => 'AUS', 1 => 'Manuell', 2 => 'Zeitsteuerung', 3 => 'Auto (vorbereitet)'] as $index => $caption) {
             IPS_SetVariableProfileAssociation('HGC.Mode', $index, $caption, '', 0);
-        }
-        if (!IPS_VariableProfileExists('HGC.Days')) {
-            IPS_CreateVariableProfile('HGC.Days', 1);
-        }
-        IPS_SetVariableProfileValues('HGC.Days', 0, 9, 1);
-        foreach ([0 => 'Täglich', 1 => 'Mo–Fr', 2 => 'Sa–So', 3 => 'Montag', 4 => 'Dienstag',
-                  5 => 'Mittwoch', 6 => 'Donnerstag', 7 => 'Freitag', 8 => 'Samstag', 9 => 'Sonntag'] as $v => $name) {
-            IPS_SetVariableProfileAssociation('HGC.Days', $v, $name, '', 0);
         }
         if (!IPS_VariableProfileExists('HGC.ValvePercent')) {
             IPS_CreateVariableProfile('HGC.ValvePercent', 1);
@@ -124,10 +107,6 @@ class HeizgeblaeseController extends IPSModule
                 $this->SetValveTarget($key, (int) $Value);
                 return;
             }
-        }
-        if (preg_match('/^(Workshop|Garage)Window([1-4])(Enabled|Days|Start|End|Stage|Valve)$/', $Ident, $matches)) {
-            $this->SetWindowField($matches[1], (int) $matches[2], $matches[3], $Value);
-            return;
         }
         throw new Exception('Unbekannte Aktion: ' . $Ident);
     }
@@ -332,30 +311,17 @@ class HeizgeblaeseController extends IPSModule
         $this->RefreshStatus();
     }
 
-    // Zeitfenster: Start inklusiv, Ende exklusiv; bei Start > Ende ueber Mitternacht.
-    // Days: 0=taeglich, 1=Mo-Fr, 2=Sa-So, 3..9=Mo..So.
-    private function DayMatch($selector, $weekday)
-    {
-        $selector = (int) $selector;
-        return $selector === 0 || ($selector === 1 && $weekday <= 5)
-            || ($selector === 2 && $weekday >= 6) || ($selector >= 3 && $selector <= 9 && $selector - 2 === $weekday);
-    }
-
-    private function Minutes($s)
-    {
-        if (!is_string($s) || !preg_match('/^([01][0-9]|2[0-3]):([0-5][0-9])$/', $s, $match)) {
-            throw new Exception('Ungueltige Uhrzeit: ' . (string) $s . ' (HH:MM erwartet).');
-        }
-        return (int) $match[1] * 60 + (int) $match[2];
-    }
-
     // IP-Symcon-Wochenplan ist die alleinige Quelle der Zeitsteuerung.
-    // Jede Aktion 1..4 ist ein einstellbares Profil aus Stufe und Ventiloeffnung.
+    // Aktionen 1..3 verwenden die jeweiligen Ventil-Sollwerte.
     // Aktion 0 ist AUS. Ohne Schaltpunkt gilt AUS; bei Tageswechsel wird der
     // letzte Schaltpunkt der Vortage beruecksichtigt (ueber Mitternacht).
     private function FindWindow($key, $now)
     {
-        $id = @IPS_GetObjectIDByIdent('Weekplan', $this->GetIDForIdent('Group' . $key));
+        $group = @IPS_GetObjectIDByIdent('Group' . $key, $this->InstanceID);
+        if ($group === false) { return null; }
+        $scheduleGroup = @IPS_GetObjectIDByIdent('Group' . $key . 'Schedule', $group);
+        if ($scheduleGroup === false) { return null; }
+        $id = @IPS_GetObjectIDByIdent('Weekplan', $scheduleGroup);
         if ($id === false || !IPS_EventExists($id)) {
             return null;
         }
@@ -415,53 +381,6 @@ class HeizgeblaeseController extends IPSModule
         }
     }
 
-    // Vorhandene V1.3-Zeitfenster einmalig in den nativen Wochenplan uebertragen.
-    // Bestehende Wochenplaene und die alten Zeitfenster bleiben unveraendert.
-    private function MigrateLegacyWindows($key, $eventID)
-    {
-        $rows = $this->ReadSchedule($key);
-        $any = false;
-        foreach ($rows as $r) {
-            if (!empty($r['Enabled'])) { $any = true; break; }
-        }
-        if (!$any) { return; }
-        for ($n = 1; $n <= 3; $n++) {
-            $row = $rows[$n - 1];
-            $this->RegisterPresetValue($key, $n, 'Valve', (int) $row['Valve']);
-        }
-        for ($day = 1; $day <= 7; $day++) {
-            $prev = 0;
-            $pointID = 1;
-            for ($minute = 0; $minute < 1440; $minute++) {
-                $wanted = 0;
-                $yesterday = $day === 1 ? 7 : $day - 1;
-                foreach ($rows as $idx => $r) {
-                    if (empty($r['Enabled'])) { continue; }
-                    try {
-                        $from = $this->Minutes((string) $r['Start']);
-                        $to = $this->Minutes((string) $r['End']);
-                    } catch (Throwable $e) { continue; }
-                    if ($from === $to) { continue; }
-                    $selector = (int) $r['Days'];
-                    $match = $from < $to
-                        ? ($minute >= $from && $minute < $to && $this->DayMatch($selector, $day))
-                        : (($minute >= $from && $this->DayMatch($selector, $day))
-                            || ($minute < $to && $this->DayMatch($selector, $yesterday)));
-                    if ($match) { $wanted = max(0, min(3, (int) $r['Stage'])); }
-                }
-                if ($minute === 0 || $wanted !== $prev) {
-                    IPS_SetEventScheduleGroupPoint($eventID, $day, $pointID++, intdiv($minute, 60), $minute % 60, 0, $wanted);
-                    $prev = $wanted;
-                }
-            }
-        }
-    }
-
-    private function RegisterPresetValue($key, $slot, $field, $value)
-    {
-        SetValueInteger($this->GetIDForIdent($key . 'Preset' . $slot . $field), $value);
-    }
-
     private function EnsureWeekplan($key, $parent)
     {
         for ($n = 1; $n <= 3; $n++) {
@@ -472,14 +391,7 @@ class HeizgeblaeseController extends IPSModule
             if ($old === false) {
                 SetValueInteger($this->GetIDForIdent($ident), 100);
             }
-            // V1.4-Stufenwahl nicht loeschen, nur verbergen.
-            $oldStage = @IPS_GetObjectIDByIdent($key . 'Preset' . $n . 'Stage', $this->InstanceID);
-            if ($oldStage !== false) { IPS_SetHidden($oldStage, true); }
         }
-        $fourthStage = @IPS_GetObjectIDByIdent($key . 'Preset4Stage', $this->InstanceID);
-        $fourthValve = @IPS_GetObjectIDByIdent($key . 'Preset4Valve', $this->InstanceID);
-        if ($fourthStage !== false) { IPS_SetHidden($fourthStage, true); }
-        if ($fourthValve !== false) { IPS_SetHidden($fourthValve, true); }
         $id = @IPS_GetObjectIDByIdent('Weekplan', $parent);
         $fresh = $id === false;
         if ($fresh) {
@@ -499,13 +411,14 @@ class HeizgeblaeseController extends IPSModule
         foreach ([1 => 0x2879C8, 2 => 0x39A672, 3 => 0xE6A23C] as $index => $color) {
             IPS_SetEventScheduleAction($id, $index, 'Stufe ' . $index, $color, 'HGC_Refresh(' . $this->InstanceID . ');');
         }
-        // Letzte Aktion ebenfalls AUS, mit EINDEUTIGER Farbe. Symcon erlaubt
-        // keine gleiche Aktionsfarbe bei unterschiedlichen ActionIDs.
-        // Der Editor kann dadurch AUS statt Stufe 3 als Standard anbieten.
-        // Aktion 0 bleibt als AUS bestehen fuer bestehende Schaltpunkte.
-        IPS_SetEventScheduleAction($id, 4, 'AUS (Standard)', 0x777778, 'HGC_Refresh(' . $this->InstanceID . ');');
+        // Alte Zusatzaktion 4 nur entfernen, falls kein Schaltpunkt darauf verweist.
+        // Andernfalls bleibt sie als AUS erhalten, um bestehende Plaene zu schuetzen.
+        if (!$this->ScheduleUsesAction($id, 4)) {
+            @IPS_SetEventScheduleAction($id, 4, '', 0, '');
+        } else {
+            IPS_SetEventScheduleAction($id, 4, 'AUS (Bestand)', 0x777778, 'HGC_Refresh(' . $this->InstanceID . ');');
+        }
         if ($fresh) {
-            $this->MigrateLegacyWindows($key, $id);
             IPS_SetEventActive($id, true);
         }
         return $id;
@@ -581,7 +494,7 @@ class HeizgeblaeseController extends IPSModule
             try {
                 SetValueFloat($this->GetIDForIdent($key . 'TemperatureFloat'), (float) GetValue($this->VariableID($key . 'Temp')));
             } catch (Throwable $e) {
-                // Temperatur ist optional; bevorzugt Integer.
+                // Temperatur ist optional und wird als Float dargestellt.
             }
         }
         try {
@@ -596,92 +509,6 @@ class HeizgeblaeseController extends IPSModule
             $this->Error('Raumtemperatur nicht lesbar: ' . $e->getMessage());
         }
         $this->ReconcilePump();
-    }
-
-    // Zeitfenster werden als editierbare Modulvariablen angelegt, keine Konfigurationseingaben.
-    // Vorhandene V1.2-Zeitfenster werden bei der erstmaligen Anlage einmalig uebernommen.
-    private function BuildScheduleVariables($key)
-    {
-        $defaults = json_decode($this->ReadPropertyString($key . 'Schedule'), true);
-        if (!is_array($defaults)) {
-            $defaults = [];
-        }
-        for ($n = 1; $n <= 4; $n++) {
-            $row = $defaults[$n - 1] ?? [];
-            $spec = [
-                'Enabled' => [0, 'Aktiv', '', (bool) ($row['Enabled'] ?? false)],
-                'Days' => [1, 'Wochentage', 'HGC.Days', (int) ($row['Days'] ?? 0)],
-                'Start' => [3, 'Beginn (HH:MM)', '', (string) ($row['Start'] ?? '06:00')],
-                'End' => [3, 'Ende (HH:MM)', '', (string) ($row['End'] ?? '08:00')],
-                'Stage' => [1, 'Luefterstufe', 'HGC.Stage', (int) ($row['Stage'] ?? 1)],
-                'Valve' => [1, 'Ventiloeffnung', 'HGC.ValvePercent', (int) ($row['Valve'] ?? 100)]
-            ];
-            $position = 100 + $n * 10;
-            foreach ($spec as $field => $item) {
-                $ident = $key . 'Window' . $n . $field;
-                $exists = @IPS_GetObjectIDByIdent($ident, $this->InstanceID) !== false;
-                $label = 'Zeitfenster ' . $n . ' | ' . $item[1];
-                if ($item[0] === 0) {
-                    $this->RegisterVariableBoolean($ident, $label, $item[2], $position++);
-                } elseif ($item[0] === 1) {
-                    $this->RegisterVariableInteger($ident, $label, $item[2], $position++);
-                } else {
-                    $this->RegisterVariableString($ident, $label, $item[2], $position++);
-                }
-                $this->EnableAction($ident);
-                // Altdaten ausschliesslich fuer Migration behalten; weder
-                // im Objektbaum noch im WebFront weiter anzeigen.
-                IPS_SetHidden($this->GetIDForIdent($ident), true);
-                if (!$exists) {
-                    SetValue($this->GetIDForIdent($ident), $item[3]);
-                }
-            }
-        }
-    }
-
-    private function ReadSchedule($key)
-    {
-        $rows = [];
-        foreach (range(1, 4) as $n) {
-            $row = [];
-            foreach (['Enabled', 'Days', 'Start', 'End', 'Stage', 'Valve'] as $field) {
-                $row[$field] = GetValue($this->GetIDForIdent($key . 'Window' . $n . $field));
-            }
-            $rows[] = $row;
-        }
-        return $rows;
-    }
-
-    private function SetWindowField($key, $n, $field, $value)
-    {
-        $this->CheckKey($key);
-        $id = $this->GetIDForIdent($key . 'Window' . $n . $field);
-        if (in_array($field, ['Start', 'End'], true)) {
-            $this->Minutes((string) $value);
-            $value = (string) $value;
-        } elseif ($field === 'Enabled') {
-            $value = (bool) $value;
-        } else {
-            $value = (int) $value;
-            $maximum = ['Days' => 9, 'Stage' => 3, 'Valve' => 100][$field];
-            if ($value < 0 || $value > $maximum) {
-                throw new Exception('Zeitfenster: Wert ausserhalb des erlaubten Bereichs.');
-            }
-        }
-        if (GetValue($id) === $value) {
-            return;
-        }
-        // Keine ungueltige Zeitspanne aktivieren (Eingabe von Start/Ende bei inaktivem Fenster erlaubt).
-        if ($field === 'Enabled' && $value) {
-            $prefix = $key . 'Window' . $n;
-            if (GetValueString($this->GetIDForIdent($prefix . 'Start')) === GetValueString($this->GetIDForIdent($prefix . 'End'))) {
-                throw new Exception('Start und Ende muessen unterschiedlich sein.');
-            }
-        }
-        SetValue($id, $value);
-        if ($this->GetMode($key) === 2) {
-            $this->EvaluateSchedules();
-        }
     }
 
     // Modulvariablen bleiben direkt unter dem Controller, damit EnableAction/RequestAction
@@ -746,20 +573,9 @@ class HeizgeblaeseController extends IPSModule
         }
         $scheduleDummy = $this->EnsureDummy('Group' . $key . 'Schedule', 'Zeitsteuerung', $dummy, 100);
         $this->EnsureWeekplan($key, $scheduleDummy);
-        // Alte v1.3-Zeitfenster behalten, aber im WebFront ausblenden.
-        for ($n = 1; $n <= 4; $n++) {
-            $old = @IPS_GetObjectIDByIdent('Group' . $key . 'Window' . $n, $scheduleDummy);
-            if ($old !== false) { IPS_SetHidden($old, true); }
-        }
         $presetDummy = $this->EnsureDummy('Group' . $key . 'Presets', 'Ventiloeffnung je Stufe', $scheduleDummy, 20);
         for ($n = 1; $n <= 3; $n++) {
             $this->LinkVariable($presetDummy, $key . 'Preset' . $n . 'Valve', 'Stufe ' . $n . ' | Ventil (%)', $n * 20);
-            $oldLink = @IPS_GetObjectIDByIdent('L_' . $key . 'Preset' . $n . 'Stage', $presetDummy);
-            if ($oldLink !== false) { IPS_SetHidden($oldLink, true); }
-        }
-        foreach (['Stage', 'Valve'] as $field) {
-            $oldLink = @IPS_GetObjectIDByIdent('L_' . $key . 'Preset4' . $field, $presetDummy);
-            if ($oldLink !== false) { IPS_SetHidden($oldLink, true); }
         }
         $this->UpdateScheduleVisibility($key);
     }
@@ -774,6 +590,69 @@ class HeizgeblaeseController extends IPSModule
         $link = @IPS_GetObjectIDByIdent('L_' . $key . 'ActiveWindow', $this->GetIDForIdent('Group' . $key));
         if ($link !== false) {
             IPS_SetHidden($link, $this->GetMode($key) !== 2);
+        }
+    }
+
+    // Nur eindeutig identifizierte, vom Modul erzeugte Altobjekte entfernen.
+    // Wochenplaene, aktuelle Ventilwerte und sonstige Nutzerdaten nicht loeschen.
+    private function DeleteLegacyChild($parent, $ident)
+    {
+        if ($parent === false) { return; }
+        $id = @IPS_GetObjectIDByIdent($ident, $parent);
+        if ($id === false) { return; }
+        if (count(IPS_GetChildrenIDs($id)) > 0) {
+            $this->SendDebug('Bereinigung', 'Nicht leer, uebersprungen: ' . $ident, 0);
+            return;
+        }
+        $type = IPS_GetObject($id)['ObjectType'];
+        try {
+            if ($type === 2) { IPS_DeleteVariable($id); }
+            elseif ($type === 6) { IPS_DeleteLink($id); }
+            elseif ($type === 1) { IPS_DeleteInstance($id); }
+        } catch (Throwable $e) {
+            $this->SendDebug('Bereinigung', $ident . ': ' . $e->getMessage(), 0);
+        }
+    }
+
+    private function ScheduleUsesAction($eventID, $actionID)
+    {
+        $event = IPS_GetEvent($eventID);
+        foreach (($event['ScheduleGroups'] ?? []) as $group) {
+            foreach (($group['Points'] ?? []) as $point) {
+                if ((int) ($point['ActionID'] ?? -1) === $actionID) { return true; }
+            }
+        }
+        return false;
+    }
+
+    private function CleanupLegacyObjects()
+    {
+        foreach (['Workshop', 'Garage'] as $key) {
+            $group = @IPS_GetObjectIDByIdent('Group' . $key, $this->InstanceID);
+            $schedule = $group === false ? false : @IPS_GetObjectIDByIdent('Group' . $key . 'Schedule', $group);
+            $presets = $schedule === false ? false : @IPS_GetObjectIDByIdent('Group' . $key . 'Presets', $schedule);
+            // Links zuerst, anschliessend die veralteten Variablen.
+            for ($n = 1; $n <= 4; $n++) {
+                $oldGroup = $schedule === false ? false : @IPS_GetObjectIDByIdent('Group' . $key . 'Window' . $n, $schedule);
+                foreach (['Enabled', 'Days', 'Start', 'End', 'Stage', 'Valve'] as $field) {
+                    $ident = $key . 'Window' . $n . $field;
+                    $this->DeleteLegacyChild($oldGroup, 'L_' . $ident);
+                    $this->DeleteLegacyChild($this->InstanceID, $ident);
+                }
+                $this->DeleteLegacyChild($schedule, 'Group' . $key . 'Window' . $n);
+            }
+            foreach ([1, 2, 3, 4] as $n) {
+                $this->DeleteLegacyChild($presets, 'L_' . $key . 'Preset' . $n . 'Stage');
+            }
+            $this->DeleteLegacyChild($presets, 'L_' . $key . 'Preset4Valve');
+            foreach ([1, 2, 3, 4] as $n) {
+                $this->DeleteLegacyChild($this->InstanceID, $key . 'Preset' . $n . 'Stage');
+            }
+            $this->DeleteLegacyChild($this->InstanceID, $key . 'Preset4Valve');
+            // Alte Ganzzahl-Temperaturen wurden bereits durch Float ersetzt.
+            $this->DeleteLegacyChild($group, 'L_' . $key . 'Temperature');
+            $this->DeleteLegacyChild($this->InstanceID, $key . 'Temperature');
+            $this->DeleteLegacyChild($this->InstanceID, $key . 'RoomTemperatureLegacy');
         }
     }
 

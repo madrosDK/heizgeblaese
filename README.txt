@@ -1,13 +1,11 @@
-HeizgeblaeseController v1.8 – Korrektur Wochenplan
+HeizgeblaeseController v1.9 - Bereinigung
 
-- Behebt "Aktionsfarbe kollidiert mit ActionID 0" beim Erstellen/Anwenden.
-- AUS (ActionID 0) = #777777; AUS (Standard, ActionID 4) = #777778.
-- Beide AUS-Aktionen schalten Stufe 0 / Ventil 0 %.
-- Die letzte Aktion AUS (Standard) soll im IP-Symcon-Wochenplan-Editor
-  als Vorschlag statt Stufe 3 dienen; das Editor-Verhalten ist versionsabhaengig.
-- Bestehende Wochenplan-Schaltpunkte bleiben unveraendert.
-- Keine Daten/alten Variablen werden geloescht.
-- Zeitsteuerung, Pumpenlogik und uebrige Einstellungen unveraendert.
+- Keine Zeitfenster-Variablen mehr: nur noch der native IP-Symcon-Wochenplan.
+- Entfernt gezielt die 48 veralteten Fenster-Variablen und alte Links/Dummies sowie ausgediente Profilvariablen bei ApplyChanges.
+- Bestehende Wochenplan-Schaltpunkte werden nicht veraendert.
+- Zusatzaktion 4 wird nur geloescht, wenn sie nicht mehr von einem Schaltpunkt verwendet wird; andernfalls bleibt sie als AUS erhalten.
+- Korrigiert Ermittlung des Wochenplans im Unterordner Zeitsteuerung.
+- Temperaturanzeigen bleiben Float, die gemeinsame Pumpensteuerung unveraendert.
 
-WICHTIG: Vor einem Update des produktiven Systems eine Sicherung anlegen,
-Schaltfunktionen unter Aufsicht testen.
+Bitte vor dem Update IP-Symcon sichern. Das Loeschen der Altvariablen ist gewuenscht und nicht rueckgaengig zu machen.
+PHP-Syntax geprueft, kein Test mit realen Aktoren.
